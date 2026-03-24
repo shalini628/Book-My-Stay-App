@@ -1,38 +1,107 @@
 import java.util.*;
+import java.io.*;
 class BookingException extends Exception {
     public BookingException(String msg) {
         super(msg);
     }
 }
 
+// ---------------- BOOKING CLASS ----------------
+class Booking implements Serializable {
+    String bookingId;
+    String roomType;
+    int quantity;
 
-class ConcurrentBookingSystem {
-
-    private Map<String, Integer> inventory;
-
-    public ConcurrentBookingSystem() {
-        inventory = new HashMap<>();
-        inventory.put("single", 5);
-        inventory.put("double", 3);
-        inventory.put("suite", 2);
+    public Booking(String bookingId, String roomType, int quantity) {
+        this.bookingId = bookingId;
+        this.roomType = roomType;
+        this.quantity = quantity;
     }
+}
 
+// ---------------- SYSTEM STATE ----------------
+class SystemState implements Serializable {
+    Map<String, Integer> inventory;
+    Map<String, Booking> bookings;
 
-    public synchronized void book(String roomType, int qty, String user) {
-        try {
-            validate(roomType, qty);
+    public SystemState(Map<String, Integer> inventory, Map<String, Booking> bookings) {
+        this.inventory = inventory;
+        this.bookings = bookings;
+    }
+}
 
-            int available = inventory.get(roomType);
-            inventory.put(roomType, available - qty);
+// ---------------- PERSISTENCE SERVICE ----------------
+class PersistenceService {
 
-            System.out.println(" " + user + " booked " + qty + " " + roomType + " room(s)");
+    private static final String FILE_NAME = "booking_data.ser";
 
-        } catch (BookingException e) {
-            System.out.println(" " + user + ": " + e.getMessage());
+    // SAVE STATE
+    public static void save(SystemState state) {
+        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(FILE_NAME))) {
+            out.writeObject(state);
+            System.out.println(" State saved successfully.");
+        } catch (IOException e) {
+            System.out.println(" Error saving data: " + e.getMessage());
         }
     }
 
+    // LOAD STATE
+    public static SystemState load() {
+        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(FILE_NAME))) {
+            SystemState state = (SystemState) in.readObject();
+            System.out.println(" State restored successfully.");
+            return state;
+        } catch (FileNotFoundException e) {
+            System.out.println(" No previous data found. Starting fresh.");
+        } catch (IOException | ClassNotFoundException e) {
+            System.out.println(" Corrupted data. Starting with clean state.");
+        }
+        return null;
+    }
+}
 
+// ---------------- BOOKING SYSTEM ----------------
+class BookingSystem {
+
+    private Map<String, Integer> inventory;
+    private Map<String, Booking> bookings;
+
+    public BookingSystem() {
+        // Try restoring state
+        SystemState state = PersistenceService.load();
+
+        if (state != null) {
+            this.inventory = state.inventory;
+            this.bookings = state.bookings;
+        } else {
+            // Fresh state
+            inventory = new HashMap<>();
+            bookings = new HashMap<>();
+
+            inventory.put("single", 5);
+            inventory.put("double", 3);
+            inventory.put("suite", 2);
+        }
+    }
+
+    // ---------------- BOOK ----------------
+    public void book(String type, int qty) {
+        try {
+            validate(type, qty);
+
+            inventory.put(type, inventory.get(type) - qty);
+
+            String id = UUID.randomUUID().toString();
+            bookings.put(id, new Booking(id, type, qty));
+
+            System.out.println(" Booking successful. ID: " + id);
+
+        } catch (BookingException e) {
+            System.out.println(" " + e.getMessage());
+        }
+    }
+
+    // ---------------- VALIDATION ----------------
     private void validate(String type, int qty) throws BookingException {
         if (!inventory.containsKey(type)) {
             throw new BookingException("Invalid room type");
@@ -45,65 +114,60 @@ class ConcurrentBookingSystem {
         }
     }
 
+    // ---------------- DISPLAY ----------------
+    public void show() {
+        System.out.println("\n--- Inventory ---");
+        for (String k : inventory.keySet()) {
+            System.out.println(k + " : " + inventory.get(k));
+        }
 
-    public synchronized void showInventory() {
-        System.out.println("\n--- Final Inventory ---");
-        for (String key : inventory.keySet()) {
-            System.out.println(key + " : " + inventory.get(key));
+        System.out.println("\n--- Bookings ---");
+        for (Booking b : bookings.values()) {
+            System.out.println(b.bookingId + " | " + b.roomType + " | " + b.quantity);
         }
     }
-}
 
-
-class BookingTask extends Thread {
-
-    private ConcurrentBookingSystem system;
-    private String roomType;
-    private int qty;
-    private String user;
-
-    public BookingTask(ConcurrentBookingSystem system, String roomType, int qty, String user) {
-        this.system = system;
-        this.roomType = roomType;
-        this.qty = qty;
-        this.user = user;
-    }
-
-    public void run() {
-        system.book(roomType, qty, user);
+    // ---------------- SAVE BEFORE EXIT ----------------
+    public void shutdown() {
+        SystemState state = new SystemState(inventory, bookings);
+        PersistenceService.save(state);
     }
 }
+
 public class BookMyStayApp {
     public static void main(String[] args) {
-        ConcurrentBookingSystem system = new ConcurrentBookingSystem();
+        Scanner sc = new Scanner(System.in);
+        BookingSystem system = new BookingSystem();
 
-        Thread t1 = new BookingTask(system, "single", 2, "User-A");
-        Thread t2 = new BookingTask(system, "single", 3, "User-B");
-        Thread t3 = new BookingTask(system, "single", 2, "User-C"); // should fail
+        while (true) {
+            System.out.println("\n1. Book Room");
+            System.out.println("2. Show Data");
+            System.out.println("3. Exit");
 
-        Thread t4 = new BookingTask(system, "double", 2, "User-D");
-        Thread t5 = new BookingTask(system, "double", 2, "User-E"); // may fail
+            int choice = sc.nextInt();
 
+            switch (choice) {
+                case 1:
+                    System.out.print("Enter room type: ");
+                    String type = sc.next();
+                    System.out.print("Enter quantity: ");
+                    int qty = sc.nextInt();
+                    system.book(type, qty);
+                    break;
 
-        t1.start();
-        t2.start();
-        t3.start();
-        t4.start();
-        t5.start();
+                case 2:
+                    system.show();
+                    break;
 
-        try {
+                case 3:
+                    system.shutdown(); // SAVE STATE
+                    System.out.println(" Exiting safely...");
+                    return;
 
-            t1.join();
-            t2.join();
-            t3.join();
-            t4.join();
-            t5.join();
-        } catch (InterruptedException e) {
-            System.out.println("Thread interrupted");
+                default:
+                    System.out.println(" Invalid choice");
+            }
         }
-
-
-        system.showInventory();
     }
 }
 
