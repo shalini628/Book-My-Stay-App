@@ -1,7 +1,23 @@
 import java.util.*;
-class InvalidBookingException extends Exception {
-    public InvalidBookingException(String message) {
+class BookingException extends Exception {
+    public BookingException(String message) {
         super(message);
+    }
+}
+
+
+
+class Booking {
+    String bookingId;
+    String roomType;
+    List<String> allocatedRooms;
+    boolean isCancelled;
+
+    public Booking(String bookingId, String roomType, List<String> allocatedRooms) {
+        this.bookingId = bookingId;
+        this.roomType = roomType;
+        this.allocatedRooms = allocatedRooms;
+        this.isCancelled = false;
     }
 }
 
@@ -9,59 +25,141 @@ class InvalidBookingException extends Exception {
 class BookingSystem {
 
 
-    private Map<String, Integer> rooms;
+    private Map<String, Integer> inventory;
+
+
+    private Map<String, Stack<String>> availableRooms;
+
+
+    private Map<String, Booking> bookings;
+
+
+    private Stack<String> rollbackStack;
 
     public BookingSystem() {
-        rooms = new HashMap<>();
-        rooms.put("single", 5);
-        rooms.put("double", 3);
-        rooms.put("suite", 2);
+        inventory = new HashMap<>();
+        availableRooms = new HashMap<>();
+        bookings = new HashMap<>();
+        rollbackStack = new Stack<>();
+
+        // Initialize rooms
+        initializeRooms("single", 5);
+        initializeRooms("double", 3);
+        initializeRooms("suite", 2);
     }
 
 
-    private void validate(String roomType, int quantity) throws InvalidBookingException {
+    private void initializeRooms(String type, int count) {
+        inventory.put(type, count);
+        Stack<String> stack = new Stack<>();
 
-
-        if (!rooms.containsKey(roomType.toLowerCase())) {
-            throw new InvalidBookingException("Invalid room type: " + roomType);
+        for (int i = count; i >= 1; i--) {
+            stack.push(type.toUpperCase() + "-" + i);
         }
+        availableRooms.put(type, stack);
+    }
 
 
-        if (quantity <= 0) {
-            throw new InvalidBookingException("not Quantity must be greater than 0");
+    private void validateBooking(String type, int qty) throws BookingException {
+        if (!inventory.containsKey(type)) {
+            throw new BookingException(" Invalid room type");
         }
-
-
-        int available = rooms.get(roomType.toLowerCase());
-        if (quantity > available) {
-            throw new InvalidBookingException(
-                    "Not enough rooms available. Only " + available + " left."
-            );
+        if (qty <= 0) {
+            throw new BookingException("Quantity must be greater than 0");
+        }
+        if (inventory.get(type) < qty) {
+            throw new BookingException("Not enough rooms available");
         }
     }
 
 
-    public void bookRoom(String roomType, int quantity) {
+    public String bookRoom(String type, int qty) {
         try {
-            validate(roomType, quantity);
+            validateBooking(type, qty);
 
-            int available = rooms.get(roomType.toLowerCase());
-            rooms.put(roomType.toLowerCase(), available - quantity);
+            List<String> allocated = new ArrayList<>();
 
-            System.out.println("✅ Booking successful!");
-            System.out.println("Remaining " + roomType + " rooms: " + rooms.get(roomType.toLowerCase()));
 
-        } catch (InvalidBookingException e) {
-            // Graceful failure handling
+            for (int i = 0; i < qty; i++) {
+                String roomId = availableRooms.get(type).pop();
+                allocated.add(roomId);
+            }
+
+
+            inventory.put(type, inventory.get(type) - qty);
+
+            String bookingId = UUID.randomUUID().toString();
+            bookings.put(bookingId, new Booking(bookingId, type, allocated));
+
+            System.out.println(" Booking successful. ID: " + bookingId);
+            System.out.println("Allocated Rooms: " + allocated);
+
+            return bookingId;
+
+        } catch (BookingException e) {
+            System.out.println(e.getMessage());
+            return null;
+        }
+    }
+
+
+    public void cancelBooking(String bookingId) {
+        try {
+
+            if (!bookings.containsKey(bookingId)) {
+                throw new BookingException("Booking does not exist");
+            }
+
+            Booking booking = bookings.get(bookingId);
+
+
+            if (booking.isCancelled) {
+                throw new BookingException("Booking already cancelled");
+            }
+
+
+            for (String roomId : booking.allocatedRooms) {
+                rollbackStack.push(roomId); // track rollback
+
+
+                availableRooms.get(booking.roomType).push(roomId);
+            }
+
+
+            int restored = booking.allocatedRooms.size();
+            inventory.put(
+                    booking.roomType,
+                    inventory.get(booking.roomType) + restored
+            );
+
+
+            booking.isCancelled = true;
+
+            System.out.println("Cancellation successful for Booking ID: " + bookingId);
+            System.out.println("Rollback Stack: " + rollbackStack);
+
+        } catch (BookingException e) {
             System.out.println(e.getMessage());
         }
     }
 
 
-    public void displayRooms() {
-        System.out.println("\n--- Current Room Availability ---");
-        for (Map.Entry<String, Integer> entry : rooms.entrySet()) {
-            System.out.println(entry.getKey() + " : " + entry.getValue());
+    public void displayInventory() {
+        System.out.println("\n--- Inventory ---");
+        for (String type : inventory.keySet()) {
+            System.out.println(type + " : " + inventory.get(type));
+        }
+    }
+
+    public void displayBookings() {
+        System.out.println("\n--- Bookings ---");
+        for (Booking b : bookings.values()) {
+            System.out.println(
+                    "ID: " + b.bookingId +
+                            " | Type: " + b.roomType +
+                            " | Rooms: " + b.allocatedRooms +
+                            " | Cancelled: " + b.isCancelled
+            );
         }
     }
 }
@@ -72,32 +170,45 @@ public class BookMyStayApp {
         BookingSystem system = new BookingSystem();
 
         while (true) {
-            system.displayRooms();
+            System.out.println("\n1. Book Room");
+            System.out.println("2. Cancel Booking");
+            System.out.println("3. Show Inventory");
+            System.out.println("4. Show Bookings");
+            System.out.println("5. Exit");
 
-            System.out.println("\nEnter room type (single/double/suite) or 'exit': ");
-            String type = sc.next();
+            int choice = sc.nextInt();
 
-            if (type.equalsIgnoreCase("exit")) {
-                System.out.println("Exiting system safely...");
-                break;
+            switch (choice) {
+                case 1:
+                    System.out.print("Enter room type: ");
+                    String type = sc.next();
+                    System.out.print("Enter quantity: ");
+                    int qty = sc.nextInt();
+                    system.bookRoom(type, qty);
+                    break;
+
+                case 2:
+                    System.out.print("Enter Booking ID: ");
+                    String id = sc.next();
+                    system.cancelBooking(id);
+                    break;
+
+                case 3:
+                    system.displayInventory();
+                    break;
+
+                case 4:
+                    system.displayBookings();
+                    break;
+
+                case 5:
+                    System.out.println("Exiting safely...");
+                    return;
+
+                default:
+                    System.out.println("Invalid choice");
             }
-
-            System.out.println("Enter quantity: ");
-            int qty;
-
-            try {
-                qty = sc.nextInt();
-            } catch (InputMismatchException e) {
-                System.out.println("Invalid input! Quantity must be a number.");
-                sc.next();
-                continue;
-            }
-
-
-            system.bookRoom(type, qty);
         }
-
-        sc.close();
-
     }
 }
+
